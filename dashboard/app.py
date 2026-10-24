@@ -36,11 +36,29 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 
 # --------------------------------------------------
+# Age Group Order
+# --------------------------------------------------
+
+AGE_ORDER = [
+    "[0-10)",
+    "[10-20)",
+    "[20-30)",
+    "[30-40)",
+    "[40-50)",
+    "[50-60)",
+    "[60-70)",
+    "[70-80)",
+    "[80-90)",
+    "[90-100)",
+]
+
+
+# --------------------------------------------------
 # Database Connection
 # --------------------------------------------------
 
 def get_connection():
-    """Create a PostgreSQL connection."""
+    """Create a PostgreSQL database connection."""
 
     return psycopg.connect(
         host=DB_HOST,
@@ -57,7 +75,7 @@ def get_connection():
 
 @st.cache_data
 def load_dashboard_data():
-    """Load analytics data from the PostgreSQL star schema."""
+    """Load dashboard data from the PostgreSQL star schema."""
 
     query = """
         SELECT
@@ -121,12 +139,13 @@ def load_dashboard_data():
                 for description in cursor.description
             ]
 
-        data = pd.DataFrame(rows, columns=columns)
+        return pd.DataFrame(
+            rows,
+            columns=columns,
+        )
 
     finally:
         connection.close()
-
-    return data
 
 
 # --------------------------------------------------
@@ -137,45 +156,66 @@ try:
     data = load_dashboard_data()
 
 except Exception as error:
-    st.error("Unable to connect to the PostgreSQL database.")
+    st.error(
+        "Unable to load data from the PostgreSQL database."
+    )
     st.exception(error)
     st.stop()
 
 
 # --------------------------------------------------
-# Dashboard Header
+# Prepare Display Columns
 # --------------------------------------------------
 
-st.title("🏥 Hospital Readmission Analytics Platform")
+data["race_display"] = (
+    data["race"]
+    .fillna("Unknown")
+)
+
+data["a1c_display"] = (
+    data["a1c_result"]
+    .fillna("Not Tested")
+)
+
+
+# --------------------------------------------------
+# Header
+# --------------------------------------------------
+
+st.title("🏥 Hospital Readmission Analytics")
+
+st.caption(
+    "Hospital Readmission & Patient Flow Analytics Platform"
+)
 
 st.write(
-    "Interactive analysis of hospital encounters, patient "
-    "utilization, and 30-day readmission patterns."
+    "Explore hospital encounters, patient demographics, "
+    "clinical utilization, and 30-day readmission patterns."
 )
 
 st.divider()
 
 
 # --------------------------------------------------
-# Sidebar Filters
+# Sidebar
 # --------------------------------------------------
 
-st.sidebar.header("Dashboard Filters")
+st.sidebar.title("Dashboard Filters")
 
-
-age_options = sorted(
-    data["age"]
-    .dropna()
-    .unique()
-    .tolist()
+st.sidebar.caption(
+    "Leave a filter on All to include every category."
 )
 
-selected_age = st.sidebar.multiselect(
+
+# Age Filter
+
+selected_age = st.sidebar.selectbox(
     "Age Group",
-    options=age_options,
-    default=age_options,
+    options=["All"] + AGE_ORDER,
 )
 
+
+# Gender Filter
 
 gender_options = sorted(
     data["gender"]
@@ -184,26 +224,27 @@ gender_options = sorted(
     .tolist()
 )
 
-selected_gender = st.sidebar.multiselect(
+selected_gender = st.sidebar.selectbox(
     "Gender",
-    options=gender_options,
-    default=gender_options,
+    options=["All"] + gender_options,
 )
 
 
+# Race Filter
+
 race_options = sorted(
-    data["race"]
-    .fillna("Unknown")
+    data["race_display"]
     .unique()
     .tolist()
 )
 
-selected_race = st.sidebar.multiselect(
+selected_race = st.sidebar.selectbox(
     "Race",
-    options=race_options,
-    default=race_options,
+    options=["All"] + race_options,
 )
 
+
+# Readmission Filter
 
 readmission_options = sorted(
     data["readmission_status"]
@@ -212,10 +253,9 @@ readmission_options = sorted(
     .tolist()
 )
 
-selected_readmission = st.sidebar.multiselect(
+selected_readmission = st.sidebar.selectbox(
     "Readmission Status",
-    options=readmission_options,
-    default=readmission_options,
+    options=["All"] + readmission_options,
 )
 
 
@@ -225,20 +265,41 @@ selected_readmission = st.sidebar.multiselect(
 
 filtered_data = data.copy()
 
-filtered_data["race_display"] = (
-    filtered_data["race"]
-    .fillna("Unknown")
-)
+
+if selected_age != "All":
+    filtered_data = filtered_data[
+        filtered_data["age"] == selected_age
+    ]
 
 
-filtered_data = filtered_data[
-    filtered_data["age"].isin(selected_age)
-    & filtered_data["gender"].isin(selected_gender)
-    & filtered_data["race_display"].isin(selected_race)
-    & filtered_data["readmission_status"].isin(
-        selected_readmission
+if selected_gender != "All":
+    filtered_data = filtered_data[
+        filtered_data["gender"] == selected_gender
+    ]
+
+
+if selected_race != "All":
+    filtered_data = filtered_data[
+        filtered_data["race_display"] == selected_race
+    ]
+
+
+if selected_readmission != "All":
+    filtered_data = filtered_data[
+        filtered_data["readmission_status"]
+        == selected_readmission
+    ]
+
+
+# --------------------------------------------------
+# Empty Filter Check
+# --------------------------------------------------
+
+if filtered_data.empty:
+    st.warning(
+        "No encounters match the selected filters."
     )
-]
+    st.stop()
 
 
 # --------------------------------------------------
@@ -247,66 +308,75 @@ filtered_data = filtered_data[
 
 total_encounters = len(filtered_data)
 
-unique_patients = filtered_data["patient_nbr"].nunique()
+unique_patients = (
+    filtered_data["patient_nbr"]
+    .nunique()
+)
 
 readmitted_30_days = (
     filtered_data["readmission_status"]
     == "Readmitted Within 30 Days"
 ).sum()
 
+readmission_rate = (
+    readmitted_30_days
+    / total_encounters
+    * 100
+)
 
-if total_encounters > 0:
-    readmission_rate = (
-        readmitted_30_days
-        / total_encounters
-        * 100
-    )
-
-    average_stay = (
-        filtered_data["time_in_hospital"].mean()
-    )
-
-else:
-    readmission_rate = 0
-    average_stay = 0
+average_stay = (
+    filtered_data["time_in_hospital"]
+    .mean()
+)
 
 
 # --------------------------------------------------
 # KPI Cards
 # --------------------------------------------------
 
-st.subheader("Key Performance Indicators")
+st.subheader("Executive Overview")
 
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 
+
 kpi1.metric(
-    "Total Encounters",
-    f"{total_encounters:,}",
+    label="Total Encounters",
+    value=f"{total_encounters:,}",
 )
+
 
 kpi2.metric(
-    "Unique Patients",
-    f"{unique_patients:,}",
+    label="Unique Patients",
+    value=f"{unique_patients:,}",
 )
+
 
 kpi3.metric(
-    "30-Day Readmission Rate",
-    f"{readmission_rate:.2f}%",
+    label="30-Day Readmissions",
+    value=f"{readmitted_30_days:,}",
 )
 
+
 kpi4.metric(
-    "Average Hospital Stay",
-    f"{average_stay:.2f} days",
+    label="30-Day Readmission Rate",
+    value=f"{readmission_rate:.2f}%",
+)
+
+
+st.metric(
+    label="Average Hospital Stay",
+    value=f"{average_stay:.2f} days",
 )
 
 st.divider()
 
 
 # --------------------------------------------------
-# Readmission Distribution
+# Readmission Overview
 # --------------------------------------------------
 
 st.subheader("Readmission Overview")
+
 
 readmission_summary = (
     filtered_data
@@ -322,16 +392,25 @@ readmission_summary = (
     )
 )
 
+
 readmission_chart = px.bar(
     readmission_summary,
     x="readmission_status",
     y="encounters",
+    text="encounters",
     title="Encounters by Readmission Status",
     labels={
         "readmission_status": "Readmission Status",
         "encounters": "Encounters",
     },
 )
+
+
+readmission_chart.update_traces(
+    texttemplate="%{text:,}",
+    textposition="outside",
+)
+
 
 st.plotly_chart(
     readmission_chart,
@@ -343,13 +422,21 @@ st.plotly_chart(
 # Age Analysis
 # --------------------------------------------------
 
-st.subheader("Readmission by Age Group")
+st.subheader("30-Day Readmission by Age Group")
+
 
 age_summary = (
     filtered_data
-    .groupby("age", as_index=False)
+    .groupby(
+        "age",
+        as_index=False,
+        observed=True,
+    )
     .agg(
-        total_encounters=("encounter_id", "count"),
+        total_encounters=(
+            "encounter_id",
+            "count",
+        ),
         readmitted_within_30_days=(
             "readmission_status",
             lambda values: (
@@ -360,6 +447,7 @@ age_summary = (
     )
 )
 
+
 age_summary["readmission_rate"] = (
     age_summary["readmitted_within_30_days"]
     / age_summary["total_encounters"]
@@ -367,16 +455,39 @@ age_summary["readmission_rate"] = (
 )
 
 
+age_summary["age"] = pd.Categorical(
+    age_summary["age"],
+    categories=AGE_ORDER,
+    ordered=True,
+)
+
+
+age_summary = age_summary.sort_values("age")
+
+
 age_chart = px.bar(
     age_summary,
     x="age",
     y="readmission_rate",
+    text="readmission_rate",
     title="30-Day Readmission Rate by Age Group",
     labels={
         "age": "Age Group",
         "readmission_rate": "Readmission Rate (%)",
     },
 )
+
+
+age_chart.update_traces(
+    texttemplate="%{text:.1f}%",
+    textposition="outside",
+)
+
+
+age_chart.update_yaxes(
+    ticksuffix="%"
+)
+
 
 st.plotly_chart(
     age_chart,
@@ -385,19 +496,24 @@ st.plotly_chart(
 
 
 # --------------------------------------------------
-# Gender and Race Analysis
+# Demographics
 # --------------------------------------------------
 
-left_column, right_column = st.columns(2)
+st.subheader("Patient Demographics")
+
+gender_column, race_column = st.columns(2)
 
 
-with left_column:
+# Gender Chart
 
-    st.subheader("Encounters by Gender")
+with gender_column:
 
     gender_summary = (
         filtered_data
-        .groupby("gender", as_index=False)
+        .groupby(
+            "gender",
+            as_index=False,
+        )
         .size()
         .rename(
             columns={
@@ -406,11 +522,21 @@ with left_column:
         )
     )
 
-    gender_chart = px.pie(
+    gender_chart = px.bar(
         gender_summary,
-        names="gender",
-        values="encounters",
-        title="Gender Distribution",
+        x="gender",
+        y="encounters",
+        text="encounters",
+        title="Encounters by Gender",
+        labels={
+            "gender": "Gender",
+            "encounters": "Encounters",
+        },
+    )
+
+    gender_chart.update_traces(
+        texttemplate="%{text:,}",
+        textposition="outside",
     )
 
     st.plotly_chart(
@@ -419,9 +545,9 @@ with left_column:
     )
 
 
-with right_column:
+# Race Chart
 
-    st.subheader("Encounters by Race")
+with race_column:
 
     race_summary = (
         filtered_data
@@ -435,17 +561,28 @@ with right_column:
                 "size": "encounters"
             }
         )
+        .sort_values(
+            "encounters",
+            ascending=True,
+        )
     )
 
     race_chart = px.bar(
         race_summary,
-        x="race_display",
-        y="encounters",
-        title="Race Distribution",
+        x="encounters",
+        y="race_display",
+        orientation="h",
+        text="encounters",
+        title="Encounters by Race",
         labels={
             "race_display": "Race",
             "encounters": "Encounters",
         },
+    )
+
+    race_chart.update_traces(
+        texttemplate="%{text:,}",
+        textposition="outside",
     )
 
     st.plotly_chart(
@@ -455,12 +592,43 @@ with right_column:
 
 
 # --------------------------------------------------
-# Previous Inpatient Utilization
+# Hospital Utilization
+# --------------------------------------------------
+
+st.divider()
+
+st.subheader("Hospital Utilization")
+
+
+utilization1, utilization2, utilization3 = st.columns(3)
+
+
+utilization1.metric(
+    "Average Outpatient Visits",
+    f"{filtered_data['number_outpatient'].mean():.2f}",
+)
+
+
+utilization2.metric(
+    "Average Emergency Visits",
+    f"{filtered_data['number_emergency'].mean():.2f}",
+)
+
+
+utilization3.metric(
+    "Average Previous Inpatient Visits",
+    f"{filtered_data['number_inpatient'].mean():.2f}",
+)
+
+
+# --------------------------------------------------
+# Previous Inpatient Visits
 # --------------------------------------------------
 
 st.subheader(
-    "Previous Inpatient Visits and 30-Day Readmission"
+    "Previous Inpatient Visits and Readmission Risk"
 )
+
 
 inpatient_summary = (
     filtered_data
@@ -469,7 +637,10 @@ inpatient_summary = (
         as_index=False,
     )
     .agg(
-        total_encounters=("encounter_id", "count"),
+        total_encounters=(
+            "encounter_id",
+            "count",
+        ),
         readmitted_within_30_days=(
             "readmission_status",
             lambda values: (
@@ -488,20 +659,44 @@ inpatient_summary["readmission_rate"] = (
 )
 
 
+# Keep categories with enough encounters for a
+# meaningful main visualization.
+inpatient_chart_data = inpatient_summary[
+    inpatient_summary["total_encounters"] >= 100
+].copy()
+
+
 inpatient_chart = px.line(
-    inpatient_summary,
+    inpatient_chart_data,
     x="number_inpatient",
     y="readmission_rate",
     markers=True,
+    hover_data={
+        "total_encounters": True,
+        "readmitted_within_30_days": True,
+        "readmission_rate": ":.2f",
+    },
     title=(
         "30-Day Readmission Rate by "
         "Previous Inpatient Visits"
     ),
     labels={
-        "number_inpatient": "Previous Inpatient Visits",
-        "readmission_rate": "Readmission Rate (%)",
+        "number_inpatient":
+            "Previous Inpatient Visits",
+        "readmission_rate":
+            "Readmission Rate (%)",
+        "total_encounters":
+            "Total Encounters",
+        "readmitted_within_30_days":
+            "30-Day Readmissions",
     },
 )
+
+
+inpatient_chart.update_yaxes(
+    ticksuffix="%"
+)
+
 
 st.plotly_chart(
     inpatient_chart,
@@ -509,11 +704,21 @@ st.plotly_chart(
 )
 
 
+st.caption(
+    "The main utilization chart includes groups with at "
+    "least 100 encounters to reduce distortion from very "
+    "small sample sizes."
+)
+
+
 # --------------------------------------------------
 # Clinical Utilization
 # --------------------------------------------------
 
-st.subheader("Clinical Utilization")
+st.divider()
+
+st.subheader("Clinical Utilization by Readmission Status")
+
 
 clinical_summary = (
     filtered_data
@@ -528,6 +733,10 @@ clinical_summary = (
         ),
         average_lab_procedures=(
             "num_lab_procedures",
+            "mean",
+        ),
+        average_procedures=(
+            "num_procedures",
             "mean",
         ),
         average_medications=(
@@ -555,22 +764,18 @@ st.dataframe(
 
 st.subheader("A1C Testing and Readmission")
 
-a1c_data = filtered_data.copy()
-
-a1c_data["a1c_display"] = (
-    a1c_data["a1c_result"]
-    .fillna("Not Tested")
-)
-
 
 a1c_summary = (
-    a1c_data
+    filtered_data
     .groupby(
         "a1c_display",
         as_index=False,
     )
     .agg(
-        total_encounters=("encounter_id", "count"),
+        total_encounters=(
+            "encounter_id",
+            "count",
+        ),
         readmitted_within_30_days=(
             "readmission_status",
             lambda values: (
@@ -593,12 +798,32 @@ a1c_chart = px.bar(
     a1c_summary,
     x="a1c_display",
     y="readmission_rate",
+    text="readmission_rate",
+    hover_data={
+        "total_encounters": True,
+        "readmitted_within_30_days": True,
+    },
     title="30-Day Readmission Rate by A1C Result",
     labels={
         "a1c_display": "A1C Result",
         "readmission_rate": "Readmission Rate (%)",
+        "total_encounters": "Total Encounters",
+        "readmitted_within_30_days":
+            "30-Day Readmissions",
     },
 )
+
+
+a1c_chart.update_traces(
+    texttemplate="%{text:.1f}%",
+    textposition="outside",
+)
+
+
+a1c_chart.update_yaxes(
+    ticksuffix="%"
+)
+
 
 st.plotly_chart(
     a1c_chart,
@@ -607,10 +832,17 @@ st.plotly_chart(
 
 
 # --------------------------------------------------
-# Data Preview
+# Encounter Data
 # --------------------------------------------------
 
-with st.expander("View Encounter Data"):
+st.divider()
+
+
+with st.expander("Explore Encounter Data"):
+
+    st.write(
+        f"Showing {len(filtered_data):,} encounters."
+    )
 
     st.dataframe(
         filtered_data,
@@ -626,6 +858,6 @@ with st.expander("View Encounter Data"):
 st.divider()
 
 st.caption(
-    "Hospital Readmission & Patient Flow Analytics Platform | "
-    "Python • PostgreSQL • Streamlit • Plotly"
+    "Hospital Readmission & Patient Flow Analytics Platform "
+    "| Python • PostgreSQL • Streamlit • Plotly"
 )

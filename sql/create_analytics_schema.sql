@@ -17,6 +17,7 @@ DROP TABLE IF EXISTS dim_patient;
 
 -- ============================================================
 -- 1. Patient Dimension
+-- One row per unique patient
 -- ============================================================
 
 CREATE TABLE dim_patient (
@@ -126,6 +127,7 @@ FROM hospital_readmissions;
 
 -- ============================================================
 -- 5. Encounter Fact Table
+-- One row per hospital encounter
 -- ============================================================
 
 CREATE TABLE fact_encounter (
@@ -136,7 +138,13 @@ CREATE TABLE fact_encounter (
     diagnosis_key BIGINT NOT NULL,
     readmission_key BIGINT NOT NULL,
 
+    -- Encounter-level demographics
+    race TEXT,
+    gender TEXT,
+    age TEXT,
+
     time_in_hospital INTEGER,
+
     num_lab_procedures INTEGER,
     num_procedures INTEGER,
     num_medications INTEGER,
@@ -182,6 +190,9 @@ INSERT INTO fact_encounter (
     admission_key,
     diagnosis_key,
     readmission_key,
+    race,
+    gender,
+    age,
     time_in_hospital,
     num_lab_procedures,
     num_procedures,
@@ -202,6 +213,11 @@ SELECT
     a.admission_key,
     d.diagnosis_key,
     r.readmission_key,
+
+    h.race,
+    h.gender,
+    h.age,
+
     h.time_in_hospital,
     h.num_lab_procedures,
     h.num_procedures,
@@ -251,6 +267,15 @@ ON fact_encounter(diagnosis_key);
 CREATE INDEX idx_fact_encounter_readmission
 ON fact_encounter(readmission_key);
 
+CREATE INDEX idx_fact_encounter_age
+ON fact_encounter(age);
+
+CREATE INDEX idx_fact_encounter_gender
+ON fact_encounter(gender);
+
+CREATE INDEX idx_fact_encounter_race
+ON fact_encounter(race);
+
 
 -- ============================================================
 -- 8. Verify Analytics Tables
@@ -290,3 +315,46 @@ SELECT
 FROM fact_encounter
 
 ORDER BY table_name;
+
+
+-- ============================================================
+-- 9. Verify Encounter-Level Demographics
+-- ============================================================
+
+SELECT
+    age,
+    COUNT(*) AS total_encounters,
+    COUNT(*) FILTER (
+        WHERE r.readmission_status =
+              'Readmitted Within 30 Days'
+    ) AS readmitted_within_30_days,
+
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE r.readmission_status =
+                  'Readmitted Within 30 Days'
+        ) / COUNT(*),
+        2
+    ) AS readmission_rate_percent
+
+FROM fact_encounter f
+
+JOIN dim_readmission r
+    ON f.readmission_key = r.readmission_key
+
+GROUP BY age
+
+ORDER BY
+    CASE age
+        WHEN '[0-10)' THEN 1
+        WHEN '[10-20)' THEN 2
+        WHEN '[20-30)' THEN 3
+        WHEN '[30-40)' THEN 4
+        WHEN '[40-50)' THEN 5
+        WHEN '[50-60)' THEN 6
+        WHEN '[60-70)' THEN 7
+        WHEN '[70-80)' THEN 8
+        WHEN '[80-90)' THEN 9
+        WHEN '[90-100)' THEN 10
+        ELSE 11
+    END;
